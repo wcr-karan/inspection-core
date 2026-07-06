@@ -6,46 +6,24 @@ Lists all inspections for a given warehouse, sorted newest first.
 import logging
 
 from backend.services import inspection_service
-from backend.utils.exceptions import AppError, ValidationError
-from backend.utils.response import error_response, internal_error_response, success_response
+from backend.utils.decorator import lambda_handler
+from backend.utils.response import success_response
 from backend.utils.validators import get_path_parameter
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
+@lambda_handler
 def handler(event: dict, context) -> dict:
-    """Lambda entry point for listing warehouse inspections.
-
-    Path parameters:
-        warehouseId: The warehouse to list inspections for.
-
-    Returns:
-        200: List of inspections
-        400: Validation error
-        500: Internal server error
-    """
+    """Lambda entry point for listing warehouse inspections."""
     logger.info("GET /warehouses/{warehouseId}/inspections")
 
-    try:
-        warehouse_id = get_path_parameter(event, "warehouseId")
+    warehouse_id = get_path_parameter(event, "warehouseId")
+    inspections = inspection_service.get_warehouse_inspections(warehouse_id)
 
-        inspections = inspection_service.get_warehouse_inspections(warehouse_id)
-
-        return success_response({
-            "warehouseId": warehouse_id,
-            "inspections": [i.to_dict() for i in inspections],
-            "count": len(inspections),
-        })
-
-    except ValidationError as exc:
-        logger.warning("Validation failed: %s", exc.message)
-        return error_response(exc.message, status_code=400)
-
-    except AppError as exc:
-        logger.error("Application error: %s", exc.message)
-        return error_response(exc.message, status_code=500)
-
-    except Exception as exc:
-        logger.exception("Unexpected error in get_warehouse_inspections")
-        return internal_error_response()
+    return success_response({
+        "warehouseId": warehouse_id,
+        "inspections": [i.to_dict() for i in inspections],
+        "count": len(inspections),
+    })
