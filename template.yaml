@@ -1,0 +1,245 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Drone Inspection Backend
+  Serverless API for managing drone inspections, image uploads, and warehouse/drone associations.
+
+# ============================================================
+# Global Settings
+# ============================================================
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 30
+    MemorySize: 256
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        INSPECTIONS_TABLE: !Ref InspectionsTable
+        IMAGES_TABLE: !Ref ImagesTable
+        IMAGES_BUCKET: !Ref ImagesBucket
+        LOG_LEVEL: INFO
+
+# ============================================================
+# Parameters
+# ============================================================
+Parameters:
+  StageName:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - staging
+      - prod
+    Description: Deployment stage name
+
+# ============================================================
+# Resources
+# ============================================================
+Resources:
+
+  # ----------------------------------------------------------
+  # API Gateway
+  # ----------------------------------------------------------
+  InspectionApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub drone-inspection-api-${StageName}
+      StageName: !Ref StageName
+      Description: REST API for drone inspection management
+
+  # ----------------------------------------------------------
+  # Lambda Functions
+  # ----------------------------------------------------------
+  CreateInspectionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub create-inspection-${StageName}
+      Handler: backend.handlers.create_inspection.handler
+      CodeUri: .
+      Description: Creates a new drone inspection
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InspectionsTable
+      Events:
+        CreateInspection:
+          Type: Api
+          Properties:
+            RestApiId: !Ref InspectionApi
+            Path: /inspections
+            Method: POST
+
+  GetWarehouseInspectionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub get-warehouse-inspections-${StageName}
+      Handler: backend.handlers.get_warehouse_inspections.handler
+      CodeUri: .
+      Description: Lists all inspections for a given warehouse
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref InspectionsTable
+      Events:
+        GetWarehouseInspections:
+          Type: Api
+          Properties:
+            RestApiId: !Ref InspectionApi
+            Path: /warehouses/{warehouseId}/inspections
+            Method: GET
+
+  GetDroneInspectionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub get-drone-inspections-${StageName}
+      Handler: backend.handlers.get_drone_inspections.handler
+      CodeUri: .
+      Description: Lists all inspections for a given drone
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref InspectionsTable
+      Events:
+        GetDroneInspections:
+          Type: Api
+          Properties:
+            RestApiId: !Ref InspectionApi
+            Path: /drones/{droneId}/inspections
+            Method: GET
+
+  GenerateUploadUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub generate-upload-url-${StageName}
+      Handler: backend.handlers.generate_upload_url.handler
+      CodeUri: .
+      Description: Generates a pre-signed S3 URL for image upload
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref InspectionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ImagesTable
+        - S3CrudPolicy:
+            BucketName: !Ref ImagesBucket
+      Events:
+        GenerateUploadUrl:
+          Type: Api
+          Properties:
+            RestApiId: !Ref InspectionApi
+            Path: /inspections/{inspectionId}/upload-url
+            Method: POST
+
+  GetInspectionImagesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub get-inspection-images-${StageName}
+      Handler: backend.handlers.get_inspection_images.handler
+      CodeUri: .
+      Description: Lists all images for a given inspection
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ImagesTable
+      Events:
+        GetInspectionImages:
+          Type: Api
+          Properties:
+            RestApiId: !Ref InspectionApi
+            Path: /inspections/{inspectionId}/images
+            Method: GET
+
+  # ----------------------------------------------------------
+  # DynamoDB Tables
+  # ----------------------------------------------------------
+  InspectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub inspections-${StageName}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: inspectionId
+          AttributeType: S
+        - AttributeName: warehouseId
+          AttributeType: S
+        - AttributeName: droneId
+          AttributeType: S
+        - AttributeName: createdAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: inspectionId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: warehouseId-createdAt-index
+          KeySchema:
+            - AttributeName: warehouseId
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: droneId-createdAt-index
+          KeySchema:
+            - AttributeName: droneId
+              KeyType: HASH
+            - AttributeName: createdAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  ImagesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub images-${StageName}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: inspectionId
+          AttributeType: S
+        - AttributeName: imageId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: inspectionId
+          KeyType: HASH
+        - AttributeName: imageId
+          KeyType: RANGE
+
+  # ----------------------------------------------------------
+  # S3 Bucket
+  # ----------------------------------------------------------
+  ImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub drone-inspection-images-${StageName}-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToIA
+            Status: Enabled
+            Transitions:
+              - StorageClass: STANDARD_IA
+                TransitionInDays: 90
+
+# ============================================================
+# Outputs
+# ============================================================
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${InspectionApi}.execute-api.${AWS::Region}.amazonaws.com/${StageName}/
+
+  InspectionsTableName:
+    Description: Inspections DynamoDB table name
+    Value: !Ref InspectionsTable
+
+  ImagesTableName:
+    Description: Images DynamoDB table name
+    Value: !Ref ImagesTable
+
+  ImagesBucketName:
+    Description: S3 bucket for inspection images
+    Value: !Ref ImagesBucket
