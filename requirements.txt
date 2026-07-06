@@ -1,0 +1,4 @@
+# Production dependencies
+# Note: boto3 is NOT listed here because AWS Lambda provides it in the runtime.
+# Including it would unnecessarily bloat the deployment package (~50MB).
+# For local development, boto3 is installed via requirements-dev.txt.
